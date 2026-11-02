@@ -15,6 +15,9 @@ jobs:
           channel: stable
       - name: Create Android project
         run: flutter create --org com.clipnova --project-name clipnova --platforms=android build_app
+      - name: Set minSdk 24
+        run: |
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' build_app/android/app/build.gradle*
       - name: Copy our code
         run: |
           cp pubspec.yaml build_app/pubspec.yaml
