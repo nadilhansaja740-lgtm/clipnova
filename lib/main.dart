@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'photo_editor.dart';
 
 void main() => runApp(const ClipNovaApp());
 
@@ -35,7 +36,8 @@ class HomePage extends StatelessWidget {
                   style: TextStyle(color: Colors.white54)),
               const SizedBox(height: 32),
               Row(children: [
-                Expanded(child: _card(context, Icons.video_library, 'Video Editor')),
+                Expanded(
+                    child: _card(context, Icons.video_library, 'Video Editor')),
                 const SizedBox(width: 16),
                 Expanded(child: _card(context, Icons.photo, 'Photo Editor')),
               ]),
@@ -48,8 +50,15 @@ class HomePage extends StatelessWidget {
 
   Widget _card(BuildContext context, IconData icon, String label) {
     return InkWell(
-      onTap: () => ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('$label - coming soon'))),
+      onTap: () {
+        if (label == 'Photo Editor') {
+          Navigator.push(context,
+              MaterialPageRoute(builder: (_) => const PhotoEditorPage()));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('$label - coming soon')));
+        }
+      },
       child: Container(
         height: 140,
         decoration: BoxDecoration(
