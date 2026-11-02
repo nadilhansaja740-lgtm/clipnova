@@ -1,8 +1,13 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:ffmpeg_kit_flutter_minimal/ffmpeg_kit.dart';
 import 'package:flutter/material.dart';
+import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
+import 'diamonds.dart';
+import 'exporter.dart';
+import 'models.dart';
 
 const Map<String, List<double>> _vFilters = {
   'Normal': [1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,1,0],
@@ -12,28 +17,22 @@ const Map<String, List<double>> _vFilters = {
   'Vintage': [0.393,0.769,0.189,0,0, 0.349,0.686,0.168,0,0, 0.272,0.534,0.131,0,0, 0,0,0,1,0],
 };
 
-class ClipItem {
-  final String path;
-  final Duration total;
-  Duration start;
-  Duration end;
-  double speed;
-  bool muted;
-
-  ClipItem(this.path, this.total,
-      {Duration? start, Duration? end, this.speed = 1, this.muted = false})
-      : start = start ?? Duration.zero,
-        end = end ?? total;
-
-  ClipItem copy() => ClipItem(path, total,
-      start: start, end: end, speed: speed, muted: muted);
+class _Q {
+  final String label;
+  final int side;
+  final String tag;
+  final int cost;
+  final bool pro;
+  const _Q(this.label, this.side, this.tag, {this.cost = 0, this.pro = false});
 }
 
-class TextItem {
-  String text;
-  Offset offset;
-  TextItem(this.text, [this.offset = Offset.zero]);
-}
+const _qualities = <_Q>[
+  _Q('480p', 480, 'SD'),
+  _Q('720p', 720, 'HD', ),
+  _Q('1080p', 1080, 'Full HD', cost: 1),
+  _Q('2K', 1440, 'Quad HD', pro: true),
+  _Q('4K', 2160, 'Ultra HD', pro: true),
+];
 
 class VideoEditorPage extends StatefulWidget {
   const VideoEditorPage({super.key});
@@ -51,6 +50,12 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
   bool _loading = false;
   VideoPlayerController? _c;
   BuildContext? _ctx;
+
+  @override
+  void initState() {
+    super.initState();
+    Diamonds.I.load();
+  }
 
   @override
   void dispose() {
@@ -164,9 +169,10 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     final tmp = VideoPlayerController.file(File(x.path));
     await tmp.initialize();
     final d = tmp.value.duration;
+    final size = tmp.value.size;
     await tmp.dispose();
     _push();
-    _clips.add(ClipItem(x.path, d));
+    _clips.add(ClipItem(x.path, d, size));
     await _load(_clips.length - 1);
   }
 
@@ -348,6 +354,171 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
     );
   }
 
+  // ---------- diamonds + export ----------
+  Future<void> _diamondDialog() async {
+    await showDialog(
+      context: _ctx ?? context,
+      builder: (dctx) => AnimatedBuilder(
+        animation: Diamonds.I,
+        builder: (_, __) {
+          final d = Diamonds.I;
+          return AlertDialog(
+            title: Text('💎 ${d.count} Diamonds'),
+            content: Text(d.canWatchAd
+                ? 'Ad එකක් බලලා 💎 1ක් ගන්න.\nඅද: ${d.adsToday}/${Diamonds.maxAdsPerDay}'
+                : 'අද දවසේ ads ඉවරයි. හෙට ආයෙත් එන්න.'),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(dctx),
+                  child: const Text('Close')),
+              if (d.canWatchAd)
+                ElevatedButton(
+                    onPressed: () => showRewardedAd(dctx),
+                    child: const Text('Watch ad')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _proDialog(_Q q) {
+    showDialog(
+      context: _ctx ?? context,
+      builder: (dctx) => AlertDialog(
+        title: const Text('🔒 Pro version'),
+        content: Text(
+            '${q.label} export එක Pro version එකට විතරයි.\nPro ඉක්මනින්ම එනවා!'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dctx),
+              child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
+  void _exportSheet() {
+    if (_clips.isEmpty) {
+      _snack('මුලින්ම video එකක් add කරන්න');
+      return;
+    }
+    showModalBottomSheet(
+      context: _ctx ?? context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      builder: (sheetCtx) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Export quality',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            for (final q in _qualities)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(q.label),
+                subtitle: Text(q.tag),
+                trailing: q.pro
+                    ? const Text('🔒 PRO')
+                    : q.cost > 0
+                        ? Text('💎 ${q.cost}')
+                        : const Text('Free'),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _startExport(q);
+                },
+              ),
+            if (_texts.isNotEmpty || _filter != 0)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'සටහන: Text සහ Filters තාම export වෙන video එකට එකතු වෙන්නේ නෑ.',
+                  style: TextStyle(fontSize: 12, color: Colors.orangeAccent),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startExport(_Q q) async {
+    if (q.pro) {
+      _proDialog(q);
+      return;
+    }
+    if (q.cost > 0 && Diamonds.I.count < q.cost) {
+      _snack('${q.label} වලට 💎 ${q.cost}ක් ඕන');
+      await _diamondDialog();
+      return;
+    }
+    await _runExport(q);
+  }
+
+  Future<void> _runExport(_Q q) async {
+    _c?.pause();
+    final progress = ValueNotifier<double>(0);
+    showDialog(
+      context: _ctx!,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: Text('Exporting ${q.label}...'),
+        content: ValueListenableBuilder<double>(
+          valueListenable: progress,
+          builder: (_, v, __) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(value: v == 0 ? null : v),
+              const SizedBox(height: 12),
+              Text('${(v * 100).round()}%'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => FFmpegKit.cancel(),
+              child: const Text('Cancel')),
+        ],
+      ),
+    );
+
+    final res = await exportClips(
+      clips: _clips.map((c) => c.copy()).toList(),
+      shortSide: q.side,
+      onProgress: (p) => progress.value = p,
+    );
+
+    if (!mounted) return;
+    Navigator.pop(_ctx!);
+
+    if (res.path != null) {
+      try {
+        if (!await Gal.hasAccess()) await Gal.requestAccess();
+        await Gal.putVideo(res.path!);
+        if (q.cost > 0) await Diamonds.I.spend(q.cost);
+        _snack('Export සාර්ථකයි! Gallery එකේ save වුණා ✅');
+      } catch (e) {
+        _snack('Save කරන්න බැරි වුණා: $e');
+      }
+    } else if (res.error != 'Cancelled') {
+      showDialog(
+        context: _ctx!,
+        builder: (dctx) => AlertDialog(
+          title: const Text('Export failed'),
+          content: SingleChildScrollView(
+              child: SelectableText(res.error ?? 'Unknown error')),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dctx),
+                child: const Text('OK')),
+          ],
+        ),
+      );
+    }
+  }
+
   // ---------- helpers ----------
   Duration get _totalLen => _clips.fold<Duration>(
       Duration.zero, (a, c) => a + (c.end - c.start));
@@ -400,10 +571,27 @@ class _VideoEditorPageState extends State<VideoEditorPage> {
         IconButton(
             icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
         const Spacer(),
+        AnimatedBuilder(
+          animation: Diamonds.I,
+          builder: (_, __) => InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: _diamondDialog,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF2C2C2C),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text('💎 ${Diamonds.I.count}'),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
         ElevatedButton(
           style: ElevatedButton.styleFrom(
               backgroundColor: Colors.white, foregroundColor: Colors.black),
-          onPressed: () => _snack('Export ඊළඟ update එකෙන් එනවා'),
+          onPressed: _exportSheet,
           child: const Text('Export',
               style: TextStyle(fontWeight: FontWeight.bold)),
         ),
